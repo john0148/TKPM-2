@@ -1,17 +1,18 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from diffusers.models.attention_processor import AttentionProcessor
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.models.attention import FeedForward
 from diffusers.models.attention_processor import (
     Attention,
     FluxAttnProcessor2_0,
-    FluxSingleAttnProcessor2_0,
+    # FluxSingleAttnProcessor2_0,
 )
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import (
@@ -32,7 +33,7 @@ from diffusers.models.embeddings import (
     CombinedTimestepTextProjEmbeddings,
 )
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
-
+from diffusers.models.embeddings import FluxPosEmbed
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -70,7 +71,6 @@ class EmbedND(nn.Module):
         )
         return emb.unsqueeze(1)
 
-
 @maybe_allow_in_graph
 class FluxSingleTransformerBlock(nn.Module):
     r"""
@@ -95,7 +95,7 @@ class FluxSingleTransformerBlock(nn.Module):
         self.act_mlp = nn.GELU(approximate="tanh")
         self.proj_out = nn.Linear(dim + self.mlp_hidden_dim, dim)
 
-        processor = FluxSingleAttnProcessor2_0()
+        processor = FluxAttnProcessor2_0()
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -293,9 +293,6 @@ class FluxTransformer2DModel(
             self.config.num_attention_heads * self.config.attention_head_dim
         )
 
-        self.pos_embed = EmbedND(
-            dim=self.inner_dim, theta=10000, axes_dim=axes_dims_rope
-        )
         text_time_guidance_cls = (
             CombinedTimestepGuidanceTextProjEmbeddings
             if guidance_embeds
@@ -341,6 +338,69 @@ class FluxTransformer2DModel(
         )
 
         self.gradient_checkpointing = False
+        
+        self.pos_embed = FluxPosEmbed(
+            theta=10000, axes_dim=axes_dims_rope
+        )
+
+    @property
+    def attn_processors(self):
+        r"""
+        Returns:
+            `dict` of attention processors: A dictionary containing all attention processors used in the model with
+            indexed by its weight name.
+        """
+        # set recursively
+        processors = {}
+
+        def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttentionProcessor]):
+            if hasattr(module, "get_processor"):
+                processors[f"{name}.processor"] = module.get_processor()
+
+            for sub_name, child in module.named_children():
+                fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
+
+            return processors
+
+        for name, module in self.named_children():
+            fn_recursive_add_processors(name, module, processors)
+
+        return processors
+
+    def set_attn_processor(self, processor):
+        r"""
+        Sets the attention processor to use to compute attention.
+
+        Parameters:
+            processor (`dict` of `AttentionProcessor` or only `AttentionProcessor`):
+                The instantiated processor class or a dictionary of processor classes that will be set as the processor
+                for **all** `Attention` layers.
+
+                If `processor` is a dict, the key needs to define the path to the corresponding cross attention
+                processor. This is strongly recommended when setting trainable attention processors.
+
+        """
+        from diffusers.models.attention_processor import AttentionProcessor
+        count = len(self.attn_processors.keys())
+
+        if isinstance(processor, dict) and len(processor) != count:
+            raise ValueError(
+                f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
+                f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
+            )
+
+        def fn_recursive_attn_processor(name: str, module: torch.nn.Module, processor):
+            if hasattr(module, "set_processor"):
+                if not isinstance(processor, dict):
+                    module.set_processor(processor)
+                else:
+                    module.set_processor(processor.pop(f"{name}.processor"))
+
+            for sub_name, child in module.named_children():
+                fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
+
+        for name, module in self.named_children():
+            fn_recursive_attn_processor(name, module, processor)
 
     def _set_gradient_checkpointing(self, module, value=False):
         if hasattr(module, "gradient_checkpointing"):
@@ -418,7 +478,20 @@ class FluxTransformer2DModel(
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
         txt_ids = txt_ids.expand(img_ids.size(0), -1, -1)
-        ids = torch.cat((txt_ids, img_ids), dim=1)
+        if txt_ids.ndim == 3:
+            logger.warning(
+                "Passing `txt_ids` 3d torch.Tensor is deprecated."
+                "Please remove the batch dimension and pass it as a 2d torch Tensor"
+            )
+            txt_ids = txt_ids[0]
+        if img_ids.ndim == 3:
+            logger.warning(
+                "Passing `img_ids` 3d torch.Tensor is deprecated."
+                "Please remove the batch dimension and pass it as a 2d torch Tensor"
+            )
+            img_ids = img_ids[0]
+
+        ids = torch.cat((txt_ids, img_ids), dim=0)
         image_rotary_emb = self.pos_embed(ids)
 
         for index_block, block in enumerate(self.transformer_blocks):

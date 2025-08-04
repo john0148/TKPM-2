@@ -75,19 +75,37 @@ def retrieve_timesteps(
     **kwargs,
 ):
     """Retrieve timesteps from scheduler."""
+    if timesteps is not None and sigmas is not None:
+        raise ValueError(
+            "Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values"
+        )
     if timesteps is not None:
-        return timesteps, num_inference_steps
-
-    if sigmas is not None:
-        timesteps = scheduler.timesteps_from_sigmas(sigmas)
-        return timesteps, len(timesteps)
-
-    if num_inference_steps is None:
-        num_inference_steps = scheduler.config.num_train_timesteps
-
-    scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-    timesteps = scheduler.timesteps
-
+        accepts_timesteps = "timesteps" in set(
+            inspect.signature(scheduler.set_timesteps).parameters.keys()
+        )
+        if not accepts_timesteps:
+            raise ValueError(
+                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
+                f" timestep schedules. Please check whether you are using the correct scheduler."
+            )
+        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
+        timesteps = scheduler.timesteps
+        num_inference_steps = len(timesteps)
+    elif sigmas is not None:
+        accept_sigmas = "sigmas" in set(
+            inspect.signature(scheduler.set_timesteps).parameters.keys()
+        )
+        if not accept_sigmas:
+            raise ValueError(
+                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
+                f" sigmas schedules. Please check whether you are using the correct scheduler."
+            )
+        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
+        timesteps = scheduler.timesteps
+        num_inference_steps = len(timesteps)
+    else:
+        scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
+        timesteps = scheduler.timesteps
     return timesteps, num_inference_steps
 
 # Step 1: Define the Merged Transformer Logic
@@ -244,10 +262,33 @@ def merged_transformer_forward(
             )
     
     # Prepare parameters (same as AnyStory)
+    # self = transformer
+
+    # (
+    #     hidden_states,
+    #     encoder_hidden_states,
+    #     pooled_projections,
+    #     timestep,
+    #     img_ids,
+    #     txt_ids,
+    #     guidance,
+    #     joint_attention_kwargs,
+    #     return_dict,
+    # ) = prepare_params(**params)
+
+    # required parameters calculated internally
+    model_config["txt_seq_len"] = encoder_hidden_states.shape[1]
+    model_config["img_seq_len"] = hidden_states.shape[1]
+    model_config["redux_seq_len"] = redux_hidden_states.shape[1] if redux_hidden_states is not None else 0
+    model_config["ref_seq_len"] = ref_hidden_states.shape[1] if ref_hidden_states is not None else 0
+    model_config["router_seq_len"] = router_hidden_states.shape[1] if router_hidden_states is not None else 0
+
     use_ref_cond = ref_hidden_states is not None and not model_config.get("use_ref_cache", False)
     use_router = router_hidden_states is not None
-    
-    if redux_hidden_states is not None:
+
+    if redux_hidden_states is not None and redux_ids is not None:
+        print(f"txt_ids.shape line 291, in merged_transformer_forward: {txt_ids.shape}")
+        print(f"redux_ids.shape line 291, in merged_transformer_forward: {redux_ids.shape}")
         encoder_hidden_states = torch.cat([encoder_hidden_states, redux_hidden_states], dim=1)
         txt_ids = torch.cat([txt_ids, redux_ids], dim=0)
     
@@ -273,8 +314,13 @@ def merged_transformer_forward(
     
     # AnyStory: Prepare reference time embeddings
     ref_t = model_config.get("ref_t", 0)
-    ref_temb = self.time_text_embed(ref_t, pooled_projections) if use_ref_cond else None
-    router_temb = self.time_text_embed(ref_t, pooled_projections) if use_router else None
+    ref_temb = (
+        self.time_text_embed(torch.ones_like(timestep) * ref_t * 1000, pooled_projections)
+        if guidance is None else
+        self.time_text_embed(torch.ones_like(timestep) * ref_t * 1000, guidance, pooled_projections)
+    ) if use_ref_cond else None
+
+    router_temb = temb if use_router else None
     
     # Embed encoder hidden states (from original transformer_flux.py)
     encoder_hidden_states = self.context_embedder(encoder_hidden_states)
@@ -285,11 +331,42 @@ def merged_transformer_forward(
     
     # Prepare rotary embeddings (from original transformer_flux.py)
     txt_ids = txt_ids.expand(img_ids.size(0), -1, -1)
-    ids = torch.cat((txt_ids, img_ids), dim=1)
+    if txt_ids.ndim == 3:
+        logger.warning(
+            "Passing `txt_ids` 3d torch.Tensor is deprecated."
+            "Please remove the batch dimension and pass it as a 2d torch Tensor"
+        )
+        txt_ids = txt_ids[0]
+    if img_ids.ndim == 3:
+        logger.warning(
+            "Passing `img_ids` 3d torch.Tensor is deprecated."
+            "Please remove the batch dimension and pass it as a 2d torch Tensor"
+        )
+        img_ids = img_ids[0]
+
+    ids = torch.cat((txt_ids, img_ids), dim=0)
     image_rotary_emb = self.pos_embed(ids)
     
     # AnyStory: Prepare reference rotary embeddings
+    if ref_ids is not None and ref_ids.ndim == 3:
+        logger.warning(
+            "Passing `ref_ids` 3d torch.Tensor is deprecated."
+            "Please remove the batch dimension and pass it as a 2d torch Tensor"
+        )
+        print(f"ref_ids.shape: {ref_ids.shape}")
+        ref_ids = ref_ids[0]
+
     ref_rotary_emb = self.pos_embed(ref_ids) if use_ref_cond else None
+
+    if router_ids is not None and router_ids.ndim == 3:
+        logger.warning(
+            "Passing `router_ids` 3d torch.Tensor is deprecated."
+            "Please remove the batch dimension and pass it as a 2d torch Tensor"
+        )
+
+        print(f"router_ids.shape: {router_ids.shape}")
+        router_ids = router_ids[0]
+    
     router_rotary_emb = self.pos_embed(router_ids) if use_router else None
     
     # Process transformer blocks with merged logic and gradient checkpointing
@@ -447,7 +524,7 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
     """
     
     model_cpu_offload_seq = "text_encoder->text_encoder_2->transformer->vae"
-    _optional_components = []
+    _optional_components = ["siglip_image_encoder", "siglip_image_processor"]
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 
     def __init__(
@@ -464,6 +541,8 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         router_embedder: AnyStoryReduxImageEncoder,
         siglip_image_encoder=None,
         siglip_image_processor=None,
+        ref_size=512,
+        torch_dtype=torch.bfloat16,
     ):
         super().__init__()
         
@@ -501,21 +580,32 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
             do_normalize=False,
             do_binarize=True,
         )
+        self.tokenizer_max_length = (
+            self.tokenizer.model_max_length
+            if hasattr(self, "tokenizer") and self.tokenizer is not None
+            else 77
+        )
+        self.ref_size = ref_size
+        self.torch_dtype = torch_dtype
 
     def _setup_anystory_attention_processor(self):
         """Set up custom AnyStory attention processor for the transformer."""
-        attn_procs = {}
+        
+        def create_custom_processor(model):
+            return AnyStoryFluxAttnProcessor2_0(
+                hidden_size=(
+                    model.config.attention_head_dim *
+                    model.config.num_attention_heads
+                ),
+                router_lora_rank=128,
+                router_lora_bias=True,
+            ).to(device=model.device, dtype=model.dtype)
+        
+        attn_procs_transformer = {}
         for name in self.transformer.attn_processors.keys():
             if name.endswith("attn.processor"):
-                attn_procs[name] = AnyStoryFluxAttnProcessor2_0(
-                    hidden_size=(
-                        self.transformer.config.attention_head_dim *
-                        self.transformer.config.num_attention_heads
-                    ),
-                    router_lora_rank=128,
-                    router_lora_bias=True,
-                ).to(device=self.device, dtype=self.transformer.dtype)
-        self.transformer.set_attn_processor(attn_procs)
+                attn_procs_transformer[name] = create_custom_processor(self.transformer)
+        self.transformer.set_attn_processor(attn_procs_transformer)
 
     @property
     def do_classifier_free_guidance(self):
@@ -860,13 +950,13 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
 
         return (redux_embeds, redux_ids), (router_embeds, router_ids)
 
-    def encode_ref_condition(self, image, mask, position_delta=None, ref_size=512):
+    def encode_ref_condition(self, image, mask, position_delta=None):
         """Encode reference image for AnyStory reference conditioning."""
         # Preprocess image
-        image = self.vae.image_processor.preprocess(
-            image.convert("RGB"), height=ref_size, width=ref_size
+        image = self.image_processor.preprocess(
+            image.convert("RGB"), height=self.ref_size, width=self.ref_size
         )
-        mask = mask.convert("L").resize((ref_size, ref_size), resample=0)
+        mask = mask.convert("L").resize((self.ref_size, self.ref_size), resample=0)
         mask = torch.from_numpy(np.array(mask)).permute(0, 1).float() / 255.0
         mask = mask.unsqueeze(0).unsqueeze(0)  # [1, 1, h, w]
 
@@ -886,11 +976,11 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         )
 
         if position_delta is None:
-            position_delta = [0, -ref_size // 16]  # width shift
+            position_delta = [0, -self.ref_size // 16]  # width shift
         ref_ids[:, 1] += position_delta[0]
         ref_ids[:, 2] += position_delta[1]
 
-        s = ref_size // 16
+        s = self.ref_size // 16
         ref_masks = (F.adaptive_avg_pool2d(mask, output_size=(s, s)) > 0).to(self.device, dtype=self.transformer.dtype)
         ref_masks = ref_masks.flatten(2).transpose(1, 2)  # bs, 1024, 1
 
@@ -915,7 +1005,7 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
 
         if latents is not None:
             latent_image_ids = self._prepare_latent_image_ids(
-                batch_size, height, width, device, dtype
+                batch_size, height // 2, width // 2, device, dtype
             )
             return latents.to(device=device, dtype=dtype), latent_image_ids
 
@@ -931,22 +1021,23 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         )
 
         latent_image_ids = self._prepare_latent_image_ids(
-            batch_size, height, width, device, dtype
+            batch_size, height // 2, width // 2, device, dtype
         )
 
         return latents, latent_image_ids
 
     def _prepare_latent_image_ids(self, batch_size, height, width, device, dtype):
-        """Prepare latent image IDs for positional encoding."""
-        h, w = height, width
-        h_id = torch.arange(h, device=device, dtype=dtype)
-        w_id = torch.arange(w, device=device, dtype=dtype)
-        h_id, w_id = torch.meshgrid(h_id, w_id, indexing="ij")
-        h_id = h_id.flatten()
-        w_id = w_id.flatten()
-        ids = torch.stack([h_id, w_id], dim=1)
-        ids = ids.repeat(batch_size, 1)
-        return ids
+        latent_image_ids = torch.zeros(height, width, 3)
+        latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(height)[:, None]
+        latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(width)[None, :]
+
+        latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
+
+        latent_image_ids = latent_image_ids.reshape(
+            latent_image_id_height * latent_image_id_width, latent_image_id_channels
+        )
+
+        return latent_image_ids.to(device=device, dtype=dtype)
 
     def _pack_latents(self, latents, batch_size, num_channels_latents, height, width):
         latents = latents.view(
@@ -1192,15 +1283,15 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                 else:
                     ref_start_at = 0.0
             
-            for i, (ref_image, ref_mask) in enumerate(zip(ref_images, ref_masks or [None] * len(ref_images))):
+            for i, (ref_image, ref_mask_image) in enumerate(zip(ref_images, ref_masks)):
                 # Encode redux condition with dynamic router usage
-                redux_with_router_condition = self.encode_redux_maybe_with_router_condition(ref_image, ref_mask, enable_router=use_router)
+                redux_with_router_condition = self.encode_redux_maybe_with_router_condition(ref_image, ref_mask_image, enable_router=use_router)
                 redux_conditions.append(redux_with_router_condition[0])
                 if use_router:
                     router_conditions.append(redux_with_router_condition[1])
                 
                 # Encode reference condition
-                ref_condition, ref_mask_tensor = self.encode_ref_condition(ref_image, ref_mask)
+                ref_condition, ref_mask_tensor = self.encode_ref_condition(ref_image, ref_mask_image)
                 ref_conditions.append(ref_condition)
                 if enable_ref_mask:
                     if ref_mask is None:
@@ -1297,9 +1388,9 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
 
                 # Prepare AnyStory reference conditions
                 redux_hidden_states = redux_embeds if act_redux_cond else None
-                redux_ids=redux_ids if act_redux_cond else None
+                redux_ids = redux_ids if act_redux_cond else None
                 ref_hidden_states = ref_latents if act_ref_cond else None
-                ref_ids = redux_ids if act_redux_cond else None
+                ref_ids = ref_ids if act_ref_cond else None
                 router_hidden_states = router_embeds if use_router and (act_redux_cond or act_ref_cond) else None
                 router_ids = router_ids if use_router and (act_redux_cond or act_ref_cond) else None
 
@@ -1321,6 +1412,7 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                     ) = self.controlnet(
                         hidden_states=latent_model_input,
                         controlnet_cond=control_image_processed,
+                        pos_embed_module=self.transformer.pos_embed,
                         conditioning_scale=controlnet_conditioning_scale,
                         timestep=timestep / 1000,
                         guidance=guidance,

@@ -33,7 +33,14 @@ def separable_scaled_dot_product_attention(query, key, value, attention_mask, mo
             ref_mask = ref_mask.transpose(-1, -2).unsqueeze(1)  # b, 1, 1, ref_seq_len
             ref_mask = (ref_mask - 1.) * 100.
             # not mask ref self-attention
-            attention_mask[:, :, :text_redux_image_end, text_redux_image_end:text_redux_image_ref_end] += ref_mask
+            # print(f"ref_mask.shape line 36, in separable_scaled_dot_product_attention: {ref_mask.shape}")
+            # print(f"attention_mask.shape line 36, in separable_scaled_dot_product_attention: {attention_mask[:, :, :text_redux_image_end, text_redux_image_end:text_redux_image_ref_end].shape}")
+            # print(f"text_redux_image_end: {text_redux_image_end}")
+            # print(f"text_redux_image_ref_end: {text_redux_image_ref_end}")
+            # print(f"model_config['ref_seq_len']: {model_config['ref_seq_len']}")
+            last_dim = min(text_redux_image_ref_end, attention_mask.shape[3])
+            # print(f"last_dim: {last_dim}")
+            attention_mask[:, :, :text_redux_image_end, text_redux_image_end:last_dim] += ref_mask[:, :, :, :last_dim - text_redux_image_end]
 
         if routing_map is not None:
             repeat_times = model_config["redux_seq_len"] // model_config["num_conds"]  # 81
@@ -238,6 +245,21 @@ class AnyStoryFluxAttnProcessor2_0(nn.Module):
                 ref_key = attn.norm_k(ref_key)
 
             if ref_rotary_emb is not None:
+                print(ref_query.shape)
+                print(ref_key.shape)
+                cos, sin = ref_rotary_emb
+                print(cos.shape)
+                print(sin.shape)
+                cos = cos[None, None, :, :]
+                sin = sin[None, None, :, :]
+                print(cos.shape)
+                print(sin.shape)
+                x_real, x_imag = ref_query.reshape(*ref_query.shape[:-1], -1, 2).unbind(-1)  # [B, H, S, D//2]
+                x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
+                print(x_rotated.shape)
+                print(x_real.shape)
+                print(x_imag.shape)
+
                 ref_query = apply_rotary_emb(ref_query, ref_rotary_emb)
                 ref_key = apply_rotary_emb(ref_key, ref_rotary_emb)
 

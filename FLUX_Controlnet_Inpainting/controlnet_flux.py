@@ -15,17 +15,18 @@ from diffusers.utils import (
     scale_lora_layers,
     unscale_lora_layers,
 )
-from diffusers.models.controlnet import BaseOutput, zero_module
+from diffusers.utils.outputs import BaseOutput
+from diffusers.models.controlnet import zero_module
 from diffusers.models.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
     CombinedTimestepTextProjEmbeddings,
 )
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
-from transformer_flux import (
-    EmbedND,
+from FLUX_Controlnet_Inpainting.transformer_flux import (
     FluxSingleTransformerBlock,
     FluxTransformerBlock,
 )
+from diffusers.models.embeddings import FluxPosEmbed
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -59,9 +60,6 @@ class FluxControlNetModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.out_channels = in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
 
-        self.pos_embed = EmbedND(
-            dim=self.inner_dim, theta=10000, axes_dim=axes_dims_rope
-        )
         text_time_guidance_cls = (
             CombinedTimestepGuidanceTextProjEmbeddings
             if guidance_embeds
@@ -222,6 +220,7 @@ class FluxControlNetModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     def forward(
         self,
         hidden_states: torch.Tensor,
+        pos_embed_module: FluxPosEmbed,
         controlnet_cond: torch.Tensor,
         conditioning_scale: float = 1.0,
         encoder_hidden_states: torch.Tensor = None,
@@ -293,9 +292,26 @@ class FluxControlNetModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         )
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
+        print(f"txt_ids.shape before: {txt_ids.shape}")
+        print(f"img_ids.shape before: {img_ids.shape}")
         txt_ids = txt_ids.expand(img_ids.size(0), -1, -1)
-        ids = torch.cat((txt_ids, img_ids), dim=1)
-        image_rotary_emb = self.pos_embed(ids)
+        if txt_ids.ndim == 3:
+            logger.warning(
+                "Passing `txt_ids` 3d torch.Tensor is deprecated."
+                "Please remove the batch dimension and pass it as a 2d torch Tensor"
+            )
+            print(f"txt_ids.shape: {txt_ids.shape}")
+            txt_ids = txt_ids[0]
+        if img_ids.ndim == 3:
+            logger.warning(
+                "Passing `img_ids` 3d torch.Tensor is deprecated."
+                "Please remove the batch dimension and pass it as a 2d torch Tensor"
+            )
+            print(f"img_ids.shape: {img_ids.shape}")
+            img_ids = img_ids[0]
+
+        ids = torch.cat((txt_ids, img_ids), dim=0)
+        image_rotary_emb = pos_embed_module(ids)
 
         block_samples = ()
         for _, block in enumerate(self.transformer_blocks):

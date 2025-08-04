@@ -513,6 +513,7 @@ class FluxControlNetInpaintingPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
     # Copied from diffusers.pipelines.flux.pipeline_flux._prepare_latent_image_ids
     @staticmethod
     def _prepare_latent_image_ids(batch_size, height, width, device, dtype):
+        print("Yes, I'm here")
         latent_image_ids = torch.zeros(height // 2, width // 2, 3)
         latent_image_ids[..., 1] = (
             latent_image_ids[..., 1] + torch.arange(height // 2)[:, None]
