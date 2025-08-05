@@ -186,13 +186,13 @@ if __name__ == "__main__":
     control_mask = load_image(control_mask_path_local).convert("RGB").resize(output_size)
     # control_image = None
     # control_mask = None
-    generator = torch.Generator(device=device).manual_seed(42)
+    generator = torch.Generator(device=device).manual_seed(2025)
     print("Running unified pipeline...")
     result_image = pipe(
         prompt=PROMPT, negative_prompt=NEGATIVE_PROMPT, height=output_size[1], width=output_size[0],
-        control_image=control_image, control_mask=control_mask, controlnet_conditioning_scale=0.9,
-        ref_images=ref_images_processed, ref_masks=ref_masks_processed, redux_scale=0.8,
-        num_inference_steps=50, guidance_scale=3.5, true_guidance_scale=7, generator=generator,
+        control_image=control_image, control_mask=control_mask, controlnet_conditioning_scale=0.5,
+        ref_images=ref_images_processed, ref_masks=ref_masks_processed,
+        num_inference_steps=30, guidance_scale=3.5, true_guidance_scale=3.5, generator=generator,
     ).images[0]
 
     # --- PHẦN 4: LƯU KẾT QUẢ ---
