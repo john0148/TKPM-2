@@ -181,10 +181,14 @@ class AnyStoryFluxAttnProcessor2_0(nn.Module):
 
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
 
+        print(f"hidden_states.shape line 184, in forward AnyStoryFluxAttnProcessor2_0: {hidden_states.shape}")
         # `sample` projections.
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
         value = attn.to_v(hidden_states)
+        print(f"query.shape line 189, in forward AnyStoryFluxAttnProcessor2_0: {query.shape}")
+        print(f"key.shape line 190, in forward AnyStoryFluxAttnProcessor2_0: {key.shape}")
+        print(f"value.shape line 191, in forward AnyStoryFluxAttnProcessor2_0: {value.shape}")
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
@@ -192,6 +196,10 @@ class AnyStoryFluxAttnProcessor2_0(nn.Module):
         query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+
+        print(f"query.shape line 200, in forward AnyStoryFluxAttnProcessor2_0: {query.shape}")
+        print(f"key.shape line 201, in forward AnyStoryFluxAttnProcessor2_0: {key.shape}")
+        print(f"value.shape line 202, in forward AnyStoryFluxAttnProcessor2_0: {value.shape}")
 
         if attn.norm_q is not None:
             query = attn.norm_q(query)
@@ -220,10 +228,23 @@ class AnyStoryFluxAttnProcessor2_0(nn.Module):
             if attn.norm_added_k is not None:
                 encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
 
+            print("========================")
+            print(f"encoder_hidden_states_query_proj.shape line 231, in forward AnyStoryFluxAttnProcessor2_0: {encoder_hidden_states_query_proj.shape}")
+            print(f"encoder_hidden_states_key_proj.shape line 232, in forward AnyStoryFluxAttnProcessor2_0: {encoder_hidden_states_key_proj.shape}")
+            print(f"encoder_hidden_states_value_proj.shape line 233, in forward AnyStoryFluxAttnProcessor2_0: {encoder_hidden_states_value_proj.shape}")
+            print(f"query.shape line 234, in forward AnyStoryFluxAttnProcessor2_0: {query.shape}")
+            print(f"key.shape line 235, in forward AnyStoryFluxAttnProcessor2_0: {key.shape}")
+            print(f"value.shape line 236, in forward AnyStoryFluxAttnProcessor2_0: {value.shape}")
+
             # attention
             query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
             key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
+
+        print("========================")
+        print(f"query.shape line 242, in forward AnyStoryFluxAttnProcessor2_0: {query.shape}")
+        print(f"key.shape line 243, in forward AnyStoryFluxAttnProcessor2_0: {key.shape}")
+        print(f"value.shape line 244, in forward AnyStoryFluxAttnProcessor2_0: {value.shape}")
 
         if image_rotary_emb is not None:
             query = apply_rotary_emb(query, image_rotary_emb)
@@ -330,6 +351,9 @@ class AnyStoryFluxAttnProcessor2_0(nn.Module):
             routing_map = None
 
         # hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
+        print(f"query.shape line 333, in forward AnyStoryFluxAttnProcessor2_0: {query.shape}")
+        print(f"key.shape line 334, in forward AnyStoryFluxAttnProcessor2_0: {key.shape}")
+        print(f"value.shape line 335, in forward AnyStoryFluxAttnProcessor2_0: {value.shape}")
 
         hidden_states = separable_scaled_dot_product_attention(query, key, value, attention_mask,
                                                                model_config, routing_map)
@@ -344,7 +368,13 @@ class AnyStoryFluxAttnProcessor2_0(nn.Module):
             model_config["ref_seq_len"] if not model_config.get("use_ref_cache", False) else 0)
         text_redux_image_ref_router_end = text_redux_image_ref_end + model_config["router_seq_len"]
 
-        assert hidden_states.shape[1] == text_redux_image_ref_router_end
+        print(f"hidden_states.shape line 347, in forward AnyStoryFluxAttnProcessor2_0: {hidden_states.shape}")
+        print(f"text_redux_image_ref_end: {text_redux_image_ref_end}")
+        print(f"text_redux_image_ref_router_end: {text_redux_image_ref_router_end}")
+        print(f"text_redux_image_end: {text_redux_image_end}")
+        print(f"text_redux_end: {text_redux_end}")
+        print(f"text_end: {text_end}")
+        # assert hidden_states.shape[1] == text_redux_image_ref_router_end
 
         if router_hidden_states is not None:
             router_hidden_states = hidden_states[:, text_redux_image_ref_end: text_redux_image_ref_router_end]
@@ -352,9 +382,12 @@ class AnyStoryFluxAttnProcessor2_0(nn.Module):
             ref_hidden_states = hidden_states[:, text_redux_image_end: text_redux_image_ref_end]
 
         if encoder_hidden_states is not None:
+            print("encoder_hidden_states is not None")
+            print(f"text_redux_end: {text_redux_end}")
+            print(f"text_redux_image_end: {text_redux_image_end}")
             encoder_hidden_states, hidden_states = (
-                hidden_states[:, : text_redux_end],
-                hidden_states[:, text_redux_end: text_redux_image_end],
+                hidden_states[:, : text_end],
+                hidden_states[:, text_end: text_redux_image_end],
             )
 
             # linear proj
@@ -373,9 +406,12 @@ class AnyStoryFluxAttnProcessor2_0(nn.Module):
                 with enable_lora((attn.to_add_out,), ("router_lora",), model_config.get("router_lora_scale", 1.0)):
                     router_hidden_states = attn.to_add_out(router_hidden_states)
 
+            print(f"hidden_states.shape line 383, in forward AnyStoryFluxAttnProcessor2_0: {hidden_states.shape}")
             return hidden_states, encoder_hidden_states, ref_hidden_states, router_hidden_states
 
         else:
+            print("encoder_hidden_states is None")
+            print(f"hidden_states.shape line 389, in forward AnyStoryFluxAttnProcessor2_0: {hidden_states.shape}")
             hidden_states = hidden_states[:, : text_redux_image_end]
 
             return hidden_states, ref_hidden_states, router_hidden_states

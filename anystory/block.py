@@ -21,6 +21,7 @@ def block_forward(
         router_rotary_emb=None,
         model_config: Optional[Dict[str, Any]] = {},
 ):
+    print(f"hidden_states.shape line 24, in block_forward: {hidden_states.shape}")
     use_ref_cond = ref_hidden_states is not None
     use_router = router_hidden_states is not None
 
@@ -51,6 +52,7 @@ def block_forward(
             ) = self.norm1_context(router_hidden_states, emb=router_temb)
 
     # Attention.
+    print(f"norm_hidden_states.shape line 54, in block_forward: {norm_hidden_states.shape}")
     attn_output, context_attn_output, ref_attn_output, router_attn_output = self.attn.processor(
         self.attn,
         model_config=model_config,

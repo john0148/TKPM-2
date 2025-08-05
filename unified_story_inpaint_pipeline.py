@@ -276,12 +276,12 @@ def merged_transformer_forward(
     #     return_dict,
     # ) = prepare_params(**params)
 
-    # required parameters calculated internally
-    model_config["txt_seq_len"] = encoder_hidden_states.shape[1]
-    model_config["img_seq_len"] = hidden_states.shape[1]
-    model_config["redux_seq_len"] = redux_hidden_states.shape[1] if redux_hidden_states is not None else 0
-    model_config["ref_seq_len"] = ref_hidden_states.shape[1] if ref_hidden_states is not None else 0
-    model_config["router_seq_len"] = router_hidden_states.shape[1] if router_hidden_states is not None else 0
+    # # required parameters calculated internally
+    # model_config["txt_seq_len"] = encoder_hidden_states.shape[1]
+    # model_config["img_seq_len"] = hidden_states.shape[1]
+    # model_config["redux_seq_len"] = redux_hidden_states.shape[1] if redux_hidden_states is not None else 0
+    # model_config["ref_seq_len"] = ref_hidden_states.shape[1] if ref_hidden_states is not None else 0
+    # model_config["router_seq_len"] = router_hidden_states.shape[1] if router_hidden_states is not None else 0
 
     use_ref_cond = ref_hidden_states is not None and not model_config.get("use_ref_cache", False)
     use_router = router_hidden_states is not None
@@ -291,6 +291,31 @@ def merged_transformer_forward(
         print(f"redux_ids.shape line 291, in merged_transformer_forward: {redux_ids.shape}")
         encoder_hidden_states = torch.cat([encoder_hidden_states, redux_hidden_states], dim=1)
         txt_ids = torch.cat([txt_ids, redux_ids], dim=0)
+    
+    # required parameters calculated internally AFTER concatenation
+    model_config["txt_seq_len"] = encoder_hidden_states.shape[1]
+    model_config["img_seq_len"] = hidden_states.shape[1]
+    model_config["redux_seq_len"] = redux_hidden_states.shape[1] if redux_hidden_states is not None else 0
+    model_config["ref_seq_len"] = ref_hidden_states.shape[1] if ref_hidden_states is not None else 0
+    model_config["router_seq_len"] = router_hidden_states.shape[1] if router_hidden_states is not None else 0
+    
+    # Update router_seq_len to account for the fact that router conditions are concatenated to query/key/value
+    # in the attention processor, which affects the actual sequence length
+    if router_hidden_states is not None and use_router:
+        # The router sequence is added to the query/key/value in attention processor
+        # So the actual router_seq_len should be the same as the router_hidden_states.shape[1]
+        model_config["router_seq_len"] = router_hidden_states.shape[1]
+        print(f"Updated router_seq_len: {model_config['router_seq_len']}")
+        print(f"router_hidden_states.shape: {router_hidden_states.shape}")
+    
+    # Debug prints for sequence lengths
+    print(f"model_config sequence lengths:")
+    print(f"  txt_seq_len: {model_config['txt_seq_len']}")
+    print(f"  img_seq_len: {model_config['img_seq_len']}")
+    print(f"  redux_seq_len: {model_config['redux_seq_len']}")
+    print(f"  ref_seq_len: {model_config['ref_seq_len']}")
+    print(f"  router_seq_len: {model_config['router_seq_len']}")
+    print(f"  use_ref_cache: {model_config.get('use_ref_cache', False)}")
     
     # Embed hidden states (from original transformer_flux.py)
     hidden_states = self.x_embedder(hidden_states)
@@ -330,7 +355,8 @@ def merged_transformer_forward(
         router_hidden_states = self.context_embedder(router_hidden_states) if use_router else None
     
     # Prepare rotary embeddings (from original transformer_flux.py)
-    txt_ids = txt_ids.expand(img_ids.size(0), -1, -1)
+    if txt_ids.shape[0] != hidden_states.shape[0]:
+        txt_ids = txt_ids.expand(hidden_states.size(0), -1, -1)
     if txt_ids.ndim == 3:
         logger.warning(
             "Passing `txt_ids` 3d torch.Tensor is deprecated."
@@ -1386,14 +1412,6 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                 act_redux_cond = use_redux_cond and redux_start_step <= i < redux_end_step
                 act_ref_cond = use_ref_cond and ref_start_step <= i < ref_end_step
 
-                # Prepare AnyStory reference conditions
-                redux_hidden_states = redux_embeds if act_redux_cond else None
-                redux_ids = redux_ids if act_redux_cond else None
-                ref_hidden_states = ref_latents if act_ref_cond else None
-                ref_ids = ref_ids if act_ref_cond else None
-                router_hidden_states = router_embeds if use_router and (act_redux_cond or act_ref_cond) else None
-                router_ids = router_ids if use_router and (act_redux_cond or act_ref_cond) else None
-
                 # Model configuration for AnyStory
                 model_config = {}
                 model_config["cache_ref"] = act_ref_cond and enable_ref_cache and i == ref_start_step
@@ -1403,6 +1421,14 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                 model_config["ref_shift"] = ref_shift
                 model_config["ref_mask"] = ref_mask
                 model_config["num_conds"] = num_conds if act_redux_cond or act_ref_cond else 0
+
+                # Prepare AnyStory reference conditions
+                redux_hidden_states = redux_embeds if act_redux_cond else None
+                redux_ids = redux_ids if act_redux_cond else None
+                ref_hidden_states = ref_latents if act_ref_cond else None
+                ref_ids = ref_ids if act_ref_cond else None
+                router_hidden_states = router_embeds if use_router and (act_redux_cond or act_ref_cond) else None
+                router_ids = router_ids if use_router and (act_redux_cond or act_ref_cond) else None
 
                 # Prepare ControlNet conditions
                 if control_image_processed is not None:
@@ -1498,7 +1524,7 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
             latents = latents.to(self.vae.dtype)
 
             image = self.vae.decode(latents, return_dict=False)[0]
-            image = self.vae.image_processor.postprocess(image, output_type=output_type)
+            image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Clean up
         self.maybe_free_model_hooks()
