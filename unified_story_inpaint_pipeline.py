@@ -370,8 +370,14 @@ def merged_transformer_forward(
         )
         img_ids = img_ids[0]
 
+    # print(f"txt_ids.shape in line 373 merged_transformer_forward: {txt_ids.shape}")
+    # print(f"img_ids.shape in line 373 merged_transformer_forward: {img_ids.shape}")
     ids = torch.cat((txt_ids, img_ids), dim=0)
     image_rotary_emb = self.pos_embed(ids)
+    cos, sin = image_rotary_emb
+    # print(f"image_rotary_emb.shape in line 377 merged_transformer_forward: {cos.shape}")
+    # print(f"image_rotary_emb.shape in line 377 merged_transformer_forward: {sin.shape}")
+
     
     # AnyStory: Prepare reference rotary embeddings
     if ref_ids is not None and ref_ids.ndim == 3:
@@ -1288,9 +1294,9 @@ class UnifiedStoryInpaintPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
             latents,
         )
 
-        # ControlNet
-        if self.do_classifier_free_guidance:
-            latent_image_ids = torch.cat([latent_image_ids] * 2)
+        # # ControlNet
+        # if self.do_classifier_free_guidance:
+        #     latent_image_ids = torch.cat([latent_image_ids] * 2)
 
         # =================== Prepare AnyStory conditions ===================
         ref_conditions = []

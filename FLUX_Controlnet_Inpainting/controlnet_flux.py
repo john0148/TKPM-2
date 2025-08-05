@@ -294,7 +294,7 @@ class FluxControlNetModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         print(f"txt_ids.shape before: {txt_ids.shape}")
         print(f"img_ids.shape before: {img_ids.shape}")
-        txt_ids = txt_ids.expand(img_ids.size(0), -1, -1)
+        # txt_ids = txt_ids.expand(img_ids.size(0), -1, -1)
         if txt_ids.ndim == 3:
             logger.warning(
                 "Passing `txt_ids` 3d torch.Tensor is deprecated."
