@@ -30,7 +30,7 @@ from anystory.module import AnyStoryReduxImageEncoder
 # ==========================================================================================
 QUANTIZE_MODEL = True
 ENABLE_CPU_OFFLOAD = False
-PROMPT = 'A man is sitting on a chair, full body visible, facing forward, clearly showing his face.'
+PROMPT = 'A man is sitting on a chair, full body visible, front facing, clearly showing his face.'
 NEGATIVE_PROMPT = "ugly, deformed, disfigured, poor details, bad anatomy"
 OUTPUT_PATH = "unified_result_quantized.png"
 BASE_FLUX_MODEL_ID = "black-forest-labs/FLUX.1-dev"
@@ -142,12 +142,27 @@ if __name__ == "__main__":
     # Thực hiện Quantization trên CPU
     if QUANTIZE_MODEL and OPTIMUM_AVAILABLE:
         print("Starting quantization on CPU...")
+        
+        # Core models - QUAN TRỌNG NHẤT
+        print("Quantizing core models...")
         quantize(pipe.transformer, weights=qint8); freeze(pipe.transformer)
-        quantize(pipe.text_encoder, weights=qint8); freeze(pipe.text_encoder)
+        # quantize(pipe.text_encoder, weights=qint8); freeze(pipe.text_encoder)
         quantize(pipe.text_encoder_2, weights=qint8); freeze(pipe.text_encoder_2)
         quantize(pipe.controlnet, weights=qint8); freeze(pipe.controlnet)
+        
+        # # VAE - CHIẾM NHIỀU MEMORY NHẤT
+        # print("Quantizing VAE...")
+        # quantize(pipe.vae, weights=qint8); freeze(pipe.vae)
+        
+        # # SigLIP Image Encoder - XỬ LÝ REFERENCE IMAGES
+        # print("Quantizing SigLIP image encoder...")
+        # quantize(pipe.siglip_image_encoder, weights=qint8); freeze(pipe.siglip_image_encoder)
+        
+        # # AnyStory Embedders
+        # print("Quantizing AnyStory embedders...")
         # quantize(pipe.redux_embedder, weights=qint8); freeze(pipe.redux_embedder)
         # quantize(pipe.router_embedder, weights=qint8); freeze(pipe.router_embedder)
+        
         print("Quantization on CPU complete.")
 
     # Di chuyển toàn bộ pipeline đã được tối ưu hóa lên GPU
@@ -164,20 +179,20 @@ if __name__ == "__main__":
 
     # --- PHẦN 3: CHUẨN BỊ ẢNH INPAINTING VÀ CHẠY PIPELINE ---
     print("\n--- Part 3: Preparing Inpainting Images and Running Pipeline ---")
-    output_size = (768, 768)
-    # control_image_path_local = "assets/examples/control_image.png"
-    # control_mask_path_local = "assets/examples/control_mask.png"
-    # control_image = load_image(control_image_path_local).convert("RGB").resize(output_size)
-    # control_mask = load_image(control_mask_path_local).convert("RGB").resize(output_size)
-    control_image = None
-    control_mask = None
+    output_size = (512, 512)
+    control_image_path_local = "assets/examples/control_image.png"
+    control_mask_path_local = "assets/examples/control_mask.png"
+    control_image = load_image(control_image_path_local).convert("RGB").resize(output_size)
+    control_mask = load_image(control_mask_path_local).convert("RGB").resize(output_size)
+    # control_image = None
+    # control_mask = None
     generator = torch.Generator(device=device).manual_seed(42)
     print("Running unified pipeline...")
     result_image = pipe(
         prompt=PROMPT, negative_prompt=NEGATIVE_PROMPT, height=output_size[1], width=output_size[0],
         control_image=control_image, control_mask=control_mask, controlnet_conditioning_scale=0.9,
         ref_images=ref_images_processed, ref_masks=ref_masks_processed, redux_scale=0.8,
-        num_inference_steps=25, guidance_scale=3.5, true_guidance_scale=3.5, generator=generator,
+        num_inference_steps=50, guidance_scale=3.5, true_guidance_scale=7, generator=generator,
     ).images[0]
 
     # --- PHẦN 4: LƯU KẾT QUẢ ---

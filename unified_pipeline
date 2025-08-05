@@ -1,0 +1,76 @@
+digraph UnifiedPipeline {
+	label="Giai đoạn 1: Đầu vào & Tiền xử lý"
+	A1 [label="Người dùng cung cấp:
+- Prompt & Negative Prompt
+- Ảnh tham chiếu (AnyStory)
+- Ảnh & Mask Inpainting (ControlNet)" fillcolor="#ff99ff" shape=box style="rounded,filled"]
+	B1_Text [label="Mã hóa Prompt
+(CLIP & T5 Encoders)" fillcolor="#dddddd" shape=box style="bold,filled"]
+	C1_Text [label="[Dữ liệu] Text Embeddings" fillcolor="#ffffff" shape=box style=filled]
+	B2_AnyStory [label="Mã hóa Điều kiện AnyStory
+(Redux, Ref, Router Embedders)" fillcolor="#dddddd" shape=box style="bold,filled"]
+	C2_AnyStory [label="[Dữ liệu] AnyStory Embeddings
+(Ref, Redux, Router)" fillcolor="#ffffff" shape=box style=filled]
+	B3_ControlNet [label="Chuẩn bị Điều kiện Inpainting
+(VAE Encode ảnh đã che + Ghép Mask)" fillcolor="#dddddd" shape=box style="bold,filled"]
+	C3_ControlNet [label="[Dữ liệu] ControlNet Condition" fillcolor="#ffffff" shape=box style=filled]
+	B4_Latent [label="Chuẩn bị Latent
+(Tạo nhiễu ngẫu nhiên)" fillcolor="#ff99ff" shape=box style="rounded,filled"]
+	D1 [label="[Dữ liệu] Latent nhiễu ban đầu (x_t)" fillcolor="#ffffff" shape=box style=filled]
+	A1 -> B1_Text
+	B1_Text -> C1_Text
+	A1 -> B2_AnyStory
+	B2_AnyStory -> C2_AnyStory
+	A1 -> B3_ControlNet
+	B3_ControlNet -> C3_ControlNet
+	B4_Latent -> D1
+	label="Giai đoạn 2: Vòng lặp Khử nhiễu Hợp nhất"
+	D1_loop [label="Latent nhiễu (x_t)" fillcolor="#ffffff" shape=box style=filled]
+	C3_ControlNet_loop [label="ControlNet Condition" fillcolor="#ffffff" shape=box style=filled]
+	C1_Text_loop [label="Text Embeddings" fillcolor="#ffffff" shape=box style=filled]
+	E1_ControlNet [label=FluxControlNetModel fillcolor="#dddddd" shape=box style="bold,filled"]
+	F1_Residuals [label="[Dữ liệu] Tín hiệu Điều khiển
+(ControlNet Residuals)" fillcolor="#ffffff" shape=box style=filled]
+	D1_loop -> E1_ControlNet
+	C3_ControlNet_loop -> E1_ControlNet
+	C1_Text_loop -> E1_ControlNet
+	E1_ControlNet -> F1_Residuals
+	D1_loop2 [label="Latent nhiễu (x_t)" fillcolor="#ffffff" shape=box style=filled]
+	C1_Text_loop2 [label="Text Embeddings" fillcolor="#ffffff" shape=box style=filled]
+	C2_AnyStory_loop [label="AnyStory Embeddings" fillcolor="#ffffff" shape=box style=filled]
+	F1_Residuals_loop [label="Tín hiệu Điều khiển" fillcolor="#ffffff" shape=box style=filled]
+	E2_Transformer [label="FluxTransformer2DModel (Hợp nhất)" fillcolor="#dddddd" shape=box style="bold,filled"]
+	F2_NoisePred [label="Dự đoán nhiễu (noise_pred)" fillcolor="#ffffff" shape=box style=filled]
+	D1_loop2 -> E2_Transformer
+	C1_Text_loop2 -> E2_Transformer
+	C2_AnyStory_loop -> E2_Transformer
+	F1_Residuals_loop -> E2_Transformer
+	E2_Transformer -> F2_NoisePred
+	G1 [label=merged_block_forward shape=diamond]
+	G2 [label="1. Chạy logic
+AnyStory Attention" fillcolor="#ff99ff" shape=box style="rounded,filled"]
+	G3 [label="2. Cộng tín hiệu
+ControlNet Residual" fillcolor="#ff99ff" shape=box style="rounded,filled"]
+	E2_Transformer -> G1 [label="Gọi hàm"]
+	G1 -> G2
+	G2 -> G3
+	H_Scheduler [label="Scheduler.step()" fillcolor="#ff99ff" shape=box style="rounded,filled"]
+	I_NextLatent [label="[Dữ liệu] Latent ít nhiễu hơn (x_t-1)" fillcolor="#ffffff" shape=box style=filled]
+	F2_NoisePred -> H_Scheduler
+	H_Scheduler -> I_NextLatent
+	I_NextLatent -> D1_loop [style=dashed]
+	I_NextLatent -> D1_loop2 [style=dashed]
+	C1_Text -> C1_Text_loop [style=dashed]
+	C1_Text -> C1_Text_loop2 [style=dashed]
+	C2_AnyStory -> C2_AnyStory_loop [style=dashed]
+	C3_ControlNet -> C3_ControlNet_loop [style=dashed]
+	D1 -> D1_loop [style=dashed]
+	D1 -> D1_loop2 [style=dashed]
+	label="Giai đoạn 3: Đầu ra"
+	J_FinalLatent [label="[Dữ liệu] Latent cuối cùng (sạch)" fillcolor="#ffffff" shape=box style=filled]
+	K_VAE [label="VAE Decoder" fillcolor="#dddddd" shape=box style="bold,filled"]
+	L_Result [label="(Kết quả) Ảnh cuối cùng" fillcolor="#99ff99" shape=box style=filled]
+	I_NextLatent -> J_FinalLatent [label="Sau N bước"]
+	J_FinalLatent -> K_VAE
+	K_VAE -> L_Result
+}
