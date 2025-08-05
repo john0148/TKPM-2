@@ -30,7 +30,7 @@ from anystory.module import AnyStoryReduxImageEncoder
 # ==========================================================================================
 QUANTIZE_MODEL = True
 ENABLE_CPU_OFFLOAD = False
-PROMPT = 'A man is sitting on a chair, full body visible, front facing, clearly showing his face.'
+PROMPT = 'A character is sitting on a chair, full body visible, front facing, clearly showing his face.'
 NEGATIVE_PROMPT = "ugly, deformed, disfigured, poor details, bad anatomy"
 OUTPUT_PATH = "unified_result_quantized.png"
 BASE_FLUX_MODEL_ID = "black-forest-labs/FLUX.1-dev"
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     segmentation_model.to(device).eval()
 
     ref_images_processed, ref_masks_processed = [], []
-    saitama_local_path = "assets/examples/6_2.webp"
+    saitama_local_path = "assets/examples/thayTriet.png"
     ref_image = load_image(saitama_local_path)
     print(f"Processing reference image: {saitama_local_path}")
     masked_ref_image, ref_mask = get_ref_mask_and_crop(ref_image, segmentation_model, device)
