@@ -26,7 +26,7 @@ from FLUX_Controlnet_Inpainting.transformer_flux import FluxTransformer2DModel
 from anystory.module import AnyStoryReduxImageEncoder
 
 # ==========================================================================================
-# Cấu hình (Không đổi)
+# Configuration
 # ==========================================================================================
 QUANTIZE_MODEL = True
 ENABLE_CPU_OFFLOAD = False
