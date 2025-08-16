@@ -16,7 +16,7 @@ try:
     from optimum.quanto import quantize, freeze, qint8
     OPTIMUM_AVAILABLE = True
 except ImportError:
-    print("Thư viện Optimum chưa được cài đặt. Bỏ qua bước lượng tử hóa. Để bật tính năng này, chạy: pip install optimum[quanto]")
+    print("Optimum library is not installed. Skipping quantization. To turn on this mode, run: pip install optimum[quanto]")
     OPTIMUM_AVAILABLE = False
 
 # Imports từ các tệp trong dự án
@@ -41,7 +41,7 @@ ANYSTORY_MODEL_FILENAME = "anystory_flux.bin"
 SEGMENTATION_MODEL_ID = "ZhengPeng7/BiRefNet"
 
 # ==========================================================================================
-# Helper Function (Không đổi)
+# Helper Function
 # ==========================================================================================
 def get_ref_mask_and_crop(pil_image: Image.Image, segmentation_model, device: str) -> (Image.Image, Image.Image):
     transform_image = transforms.Compose([
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.bfloat16
 
-    # --- PHẦN 1: TIỀN XỬ LÝ TẠO MASK ---
+    # ---Create MASK ---
     print("--- Part 1: Pre-processing Reference Masks ---")
     print("Loading segmentation model...")
     segmentation_model = AutoModelForImageSegmentation.from_pretrained(SEGMENTATION_MODEL_ID, trust_remote_code=True)
@@ -104,9 +104,9 @@ if __name__ == "__main__":
     gc.collect()
     torch.cuda.empty_cache()
 
-    # --- PHẦN 2: TẢI VÀ TỐI ƯU HÓA PIPELINE CHÍNH ---
+    # --- Loading and Optimizing Main Pipeline ---
     print("\n--- Part 2: Loading and Optimizing Main Pipeline ---")
-    # Tải tất cả các thành phần lên CPU
+    # Load all components to CPU
     print("Loading all model components to CPU first...")
     controlnet = FluxControlNetModel.from_pretrained(CONTROLNET_INPAINT_MODEL_ID, torch_dtype=torch_dtype)
     transformer = FluxTransformer2DModel.from_pretrained(BASE_FLUX_MODEL_ID, subfolder='transformer', torch_dtype=torch_dtype)
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     siglip_image_processor = SiglipImageProcessor(size={"height": 384, "width": 384})
     siglip_image_encoder = SiglipVisionModel.from_pretrained(FLUX_REDUX_MODEL_ID, subfolder="image_encoder", torch_dtype=torch_dtype)
     
-    # Khởi tạo pipeline hoàn chỉnh trên CPU
+    # Initializing the complete pipeline on CPU
     print("Initializing the complete pipeline on CPU...")
     pipe = UnifiedStoryInpaintPipeline.from_pretrained(
         BASE_FLUX_MODEL_ID, controlnet=controlnet, transformer=transformer, redux_embedder=redux_embedder,
@@ -123,7 +123,7 @@ if __name__ == "__main__":
         siglip_image_processor=siglip_image_processor, torch_dtype=torch_dtype,
     )
     
-    # Tải các trọng số của AnyStory (vẫn trên CPU)
+    # Loading AnyStory weights
     print("Loading AnyStory weights...")
     anystory_path = hf_hub_download(repo_id=ANYSTORY_MODEL_REPO, filename=ANYSTORY_MODEL_FILENAME)
     anystory_state_dict = torch.load(anystory_path, weights_only=True, map_location="cpu")
@@ -139,22 +139,22 @@ if __name__ == "__main__":
     pipe.load_lora_weights(router_lora_sd, adapter_name="router_lora")
     pipe.transformer.set_adapters(["ref_lora", "router_lora"], [0.0, 0.0])
 
-    # Thực hiện Quantization trên CPU
+    # Starting quantization on CPU
     if QUANTIZE_MODEL and OPTIMUM_AVAILABLE:
         print("Starting quantization on CPU...")
         
-        # Core models - QUAN TRỌNG NHẤT
+        # Quantizing core models
         print("Quantizing core models...")
         quantize(pipe.transformer, weights=qint8); freeze(pipe.transformer)
         # quantize(pipe.text_encoder, weights=qint8); freeze(pipe.text_encoder)
         quantize(pipe.text_encoder_2, weights=qint8); freeze(pipe.text_encoder_2)
         quantize(pipe.controlnet, weights=qint8); freeze(pipe.controlnet)
         
-        # # VAE - CHIẾM NHIỀU MEMORY NHẤT
+        # # Quantizing VAE
         # print("Quantizing VAE...")
         # quantize(pipe.vae, weights=qint8); freeze(pipe.vae)
         
-        # # SigLIP Image Encoder - XỬ LÝ REFERENCE IMAGES
+        # # Quantizing SigLIP image encoder
         # print("Quantizing SigLIP image encoder...")
         # quantize(pipe.siglip_image_encoder, weights=qint8); freeze(pipe.siglip_image_encoder)
         
@@ -165,11 +165,11 @@ if __name__ == "__main__":
         
         print("Quantization on CPU complete.")
 
-    # Di chuyển toàn bộ pipeline đã được tối ưu hóa lên GPU
+    # Moving the optimized pipeline to GPU
     print("Moving the optimized pipeline to GPU...")
     pipe.to(device)
 
-    # Bật CPU Offloading nếu cần
+    # Enabling CPU Offloading
     if ENABLE_CPU_OFFLOAD:
         print("Enabling CPU Offloading...")
         pipe.enable_model_cpu_offload()
@@ -177,7 +177,7 @@ if __name__ == "__main__":
     print("All models loaded and optimized successfully.")
     torch.cuda.empty_cache()
 
-    # --- PHẦN 3: CHUẨN BỊ ẢNH INPAINTING VÀ CHẠY PIPELINE ---
+    # --- Preparing Inpainting Images and Running Pipeline ---
     print("\n--- Part 3: Preparing Inpainting Images and Running Pipeline ---")
     output_size = (512, 512)
     control_image_path_local = "assets/examples/control_image.png"
@@ -195,6 +195,6 @@ if __name__ == "__main__":
         num_inference_steps=30, guidance_scale=3.5, true_guidance_scale=3.5, generator=generator,
     ).images[0]
 
-    # --- PHẦN 4: LƯU KẾT QUẢ ---
+    # --- PHẦN 4: Save the results ---
     result_image.save(OUTPUT_PATH)
     print(f"Successfully generated and saved image to {OUTPUT_PATH}")
