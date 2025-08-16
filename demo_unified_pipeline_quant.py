@@ -4,14 +4,13 @@ import numpy as np
 from typing import List
 import gc
 
-# Diffusers và Transformers imports
+
 from diffusers.utils import load_image
 from transformers import AutoModelForImageSegmentation
 from torchvision import transforms
 from huggingface_hub import hf_hub_download
 from transformers.models.siglip import SiglipImageProcessor, SiglipVisionModel
 
-# Thêm import cho quantization
 try:
     from optimum.quanto import quantize, freeze, qint8
     OPTIMUM_AVAILABLE = True
